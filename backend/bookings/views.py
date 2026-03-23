@@ -3,8 +3,10 @@ from rest_framework import status, viewsets
 from rest_framework.response import Response
 from rest_framework.decorators import api_view
 from django.db import transaction, IntegrityError
+from django.utils import timezone
 from .models import Show, Seat, Booking
 from .serializers import ShowSerializer, SeatSerializer, BookingSerializer
+from django.db import transaction, IntegrityError, OperationalError
 
 class ShowViewSet(viewsets.ModelViewSet):
     queryset = Show.objects.all()
@@ -24,18 +26,17 @@ def list_bookings(request):
 
 @api_view(['POST'])
 def book_seat_naive(request):
-    """
-    Naive implementation vulnerable to race conditions.
-    """
+    # Naive implementation vulnerable to race conditions.
+
     seat_id = request.data.get('seat_id')
-    user_name = request.data.get('user_name', 'Anonymous')
+    user_name = request.data.get('user_name')
     
     try:
         seat = Seat.objects.get(id=seat_id)
         
         if seat.status == 'AVAILABLE':
             # Simulate processing delay to make race condition more likely
-            time.sleep(1)
+            time.sleep(2)
             
             seat.status = 'BOOKED'
             seat.save()
@@ -50,15 +51,13 @@ def book_seat_naive(request):
     except Seat.DoesNotExist:
         return Response({"error": "Seat not found."}, status=status.HTTP_404_NOT_FOUND)
 
-from django.db import transaction, IntegrityError, OperationalError
 
 @api_view(['POST'])
 def book_seat_pessimistic(request):
-    """
-    Fixed implementation using pessimistic locking (select_for_update).
-    """
+    # Fixed implementation using pessimistic locking (select_for_update).
+
     seat_id = request.data.get('seat_id')
-    user_name = request.data.get('user_name', 'Anonymous')
+    user_name = request.data.get('user_name')
     
     try:
         with transaction.atomic():
@@ -85,9 +84,8 @@ def book_seat_pessimistic(request):
 
 @api_view(['POST'])
 def book_seat_optimistic(request):
-    """
-    Fixed implementation using optimistic locking (version field).
-    """
+    #Fixed implementation using optimistic locking (version field).
+
     seat_id = request.data.get('seat_id')
     user_name = request.data.get('user_name', 'Anonymous')
     
@@ -98,7 +96,7 @@ def book_seat_optimistic(request):
             # Store the version we read
             current_version = seat.version
             
-            time.sleep(1)
+            time.sleep(2)
             
             # Update only if version hasn't changed
             updated = Seat.objects.filter(
@@ -149,9 +147,10 @@ def create_show(request):
         return Response(serializer.data)
     
     title = request.data.get('title')
-    num_seats = request.data.get('num_seats', 50)
+    num_seats = request.data.get('num_seats', 10)
+    start_time = timezone.now()
     
-    show = Show.objects.create(title=title, start_time="2026-03-20T20:00:00Z")
+    show = Show.objects.create(title=title, start_time=start_time)
     
     seats = []
     for i in range(1, num_seats + 1):
