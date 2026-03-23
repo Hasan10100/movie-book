@@ -6,7 +6,7 @@ from django.db import transaction, IntegrityError
 from django.utils import timezone
 from .models import Show, Seat, Booking
 from .serializers import ShowSerializer, SeatSerializer, BookingSerializer
-from django.db import transaction, IntegrityError, OperationalError
+from django.db import transaction, IntegrityError, OperationalError, models
 
 class ShowViewSet(viewsets.ModelViewSet):
     queryset = Show.objects.all()
@@ -83,8 +83,61 @@ def book_seat_pessimistic(request):
         return Response({"error": "Seat not found."}, status=status.HTTP_404_NOT_FOUND)
 
 @api_view(['POST'])
+def lock_seat(request):
+    seat_id = request.data.get('seat_id')
+    user_name = request.data.get('user_name', 'Anonymous')
+    
+    try:
+        with transaction.atomic():
+            # Use select_for_update to prevent concurrent lock attempts
+            seat = Seat.objects.select_for_update().get(id=seat_id)
+            
+            # Check if seat is available OR if it's already locked by the SAME user
+            # OR if the lock is old (e.g., > 1 minute - for now let's just use 1 min)
+            is_locked_by_me = seat.status == 'LOCKED' and seat.locked_by == user_name
+            
+            # Simple expiry logic: 10 seconds
+            expiry_limit = timezone.now() - timezone.timedelta(seconds=10)
+            is_expired = seat.status == 'LOCKED' and (seat.locked_at is None or seat.locked_at < expiry_limit)
+
+            if seat.status == 'AVAILABLE' or is_locked_by_me or is_expired:
+                seat.status = 'LOCKED'
+                seat.locked_by = user_name
+                seat.locked_at = timezone.now()
+                seat.save()
+                return Response({
+                    "message": f"Seat {seat.seat_number} locked for 10 seconds.",
+                    "seat": SeatSerializer(seat).data
+                }, status=status.HTTP_200_OK)
+            else:
+                return Response({"error": f"Seat is currently {seat.status.lower()}."}, status=status.HTTP_409_CONFLICT)
+                
+    except Seat.DoesNotExist:
+        return Response({"error": "Seat not found."}, status=status.HTTP_404_NOT_FOUND)
+    except OperationalError:
+        return Response({"error": "Could not lock seat, try again."}, status=status.HTTP_409_CONFLICT)
+
+@api_view(['POST'])
+def unlock_seat(request):
+    seat_id = request.data.get('seat_id')
+    user_name = request.data.get('user_name') # Optional but good for security
+    
+    try:
+        seat = Seat.objects.get(id=seat_id)
+        if seat.status == 'LOCKED':
+            seat.status = 'AVAILABLE'
+            seat.locked_by = None
+            seat.locked_at = None
+            seat.save()
+            return Response({"message": f"Seat {seat.seat_number} unlocked."}, status=status.HTTP_200_OK)
+        return Response({"message": "Seat was not locked."}, status=status.HTTP_200_OK)
+    except Seat.DoesNotExist:
+        return Response({"error": "Seat not found."}, status=status.HTTP_404_NOT_FOUND)
+
+@api_view(['POST'])
 def book_seat_optimistic(request):
-    #Fixed implementation using optimistic locking (version field).
+    # Fixed implementation using optimistic locking (version field).
+    # UPDATED: Now also checks if seat is LOCKED by the user.
 
     seat_id = request.data.get('seat_id')
     user_name = request.data.get('user_name', 'Anonymous')
@@ -92,32 +145,37 @@ def book_seat_optimistic(request):
     try:
         seat = Seat.objects.get(id=seat_id)
         
-        if seat.status == 'AVAILABLE':
+        # Allow booking if AVAILABLE or LOCKED by the same user
+        if seat.status in ['AVAILABLE', 'LOCKED']:
+            if seat.status == 'LOCKED' and seat.locked_by != user_name:
+                return Response({"error": "Seat is locked by another user."}, status=status.HTTP_409_CONFLICT)
+
             # Store the version we read
             current_version = seat.version
             
-            time.sleep(2)
-            
-            # Update only if version hasn't changed
-            updated = Seat.objects.filter(
-                id=seat_id, 
-                status='AVAILABLE', 
-                version=current_version
-            ).update(
-                status='BOOKED', 
-                version=current_version + 1
-            )
-            
-            if updated:
-                try:
+            with transaction.atomic():
+                # Update only if version hasn't changed
+                updated = Seat.objects.filter(
+                    id=seat_id, 
+                    version=current_version
+                ).filter(
+                    models.Q(status='AVAILABLE') | models.Q(status='LOCKED', locked_by=user_name)
+                ).update(
+                    status='BOOKED', 
+                    version=current_version + 1,
+                    locked_by=None,
+                    locked_at=None
+                )
+                
+                if updated:
                     Booking.objects.create(seat=seat, user_name=user_name)
-                    return Response({"message": f"Seat {seat.seat_number} booked successfully (optimistic)!"}, status=status.HTTP_201_CREATED)
-                except IntegrityError:
-                    return Response({"error": "Database integrity error."}, status=status.HTTP_409_CONFLICT)
-            else:
-                return Response({"error": "Seat already booked or modified by another request."}, status=status.HTTP_409_CONFLICT)
+                    return Response({"message": f"Seat {seat.seat_number} booked successfully!"}, status=status.HTTP_201_CREATED)
+                else:
+                    return Response({"error": "Seat already booked or modified by another request."}, status=status.HTTP_409_CONFLICT)
         else:
             return Response({"error": "Seat already booked."}, status=status.HTTP_400_BAD_REQUEST)
+    except IntegrityError:
+        return Response({"error": "Database integrity error or seat already booked."}, status=status.HTTP_409_CONFLICT)
     except Seat.DoesNotExist:
         return Response({"error": "Seat not found."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -135,7 +193,9 @@ def api_root(request):
             "bookings": "/api/bookings/",
             "book_naive": "/api/book/naive/",
             "book_pessimistic": "/api/book/pessimistic/",
-            "book_optimistic": "/api/book/optimistic/"
+            "book_optimistic": "/api/book/optimistic/",
+            "lock": "/api/lock/",
+            "unlock": "/api/unlock/"
         }
     })
 

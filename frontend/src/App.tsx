@@ -7,9 +7,11 @@ const API_BASE = 'http://127.0.0.1:8000/';
 interface Seat {
   id: number;
   seat_number: string;
-  status: 'AVAILABLE' | 'BOOKED';
+  status: 'AVAILABLE' | 'BOOKED' | 'LOCKED';
   show: number;
   version: number;
+  locked_by: string | null;
+  locked_at: string | null;
 }
 
 const App: React.FC = () => {
@@ -24,6 +26,23 @@ const App: React.FC = () => {
   const [userName, setUserName] = useState(() => {
     return sessionStorage.getItem('userName') || '';
   });
+  const [confirmingSeat, setConfirmingSeat] = useState<Seat | null>(null);
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    if (confirmingSeat && confirmingSeat.locked_at) {
+      const lockTime = new Date(confirmingSeat.locked_at).getTime();
+      if (now - lockTime > 10000) {
+        setConfirmingSeat(null);
+        setMessage({ text: 'Your lock has expired. Please try again.', type: 'error' });
+      }
+    }
+  }, [now, confirmingSeat]);
 
   const fetchShows = async () => {
     try {
@@ -97,26 +116,67 @@ const App: React.FC = () => {
     setLoading(false);
   };
 
-  const handleBook = async (seatId: number, endpoint: string) => {
+  const handleSeatClick = async (seat: Seat) => {
+    if (seat.status === 'BOOKED') return;
+    
+    // Instead of blocking locked seats in the UI, let the API handle the lock logic
+    // (This allows taking over expired locks)
+    
     if (!userName.trim()) {
-      setMessage({ text: 'Please enter your name before booking!', type: 'error' });
+      setMessage({ text: 'Please enter your name first!', type: 'error' });
       return;
     }
+
     setLoading(true);
-    setMessage(null);
     try {
-      const res = await axios.post(`${API_BASE}/book/${endpoint}/`, {
-        seat_id: seatId,
+      const res = await axios.post(`${API_BASE}/lock/`, {
+        seat_id: seat.id,
+        user_name: userName
+      });
+      setConfirmingSeat(res.data.seat); // Use updated seat data from server
+      if (selectedShow) fetchSeats(selectedShow);
+    } catch (err: any) {
+      const errorMsg = err.response?.data?.error || 'Could not lock seat';
+      setMessage({ text: errorMsg, type: 'error' });
+    }
+    setLoading(false);
+  };
+
+  const handleConfirmBooking = async () => {
+    if (!confirmingSeat) return;
+    
+    setLoading(true);
+    try {
+      const res = await axios.post(`${API_BASE}/book/optimistic/`, {
+        seat_id: confirmingSeat.id,
         user_name: userName
       });
       setMessage({ text: res.data.message, type: 'success' });
+      setConfirmingSeat(null);
       if (selectedShow) fetchSeats(selectedShow);
     } catch (err: any) {
-      const errorMsg = err.response?.data?.error || err.response?.data?.message || 'Booking failed';
+      const errorMsg = err.response?.data?.error || 'Booking failed';
       setMessage({ text: errorMsg, type: 'error' });
+      setConfirmingSeat(null);
       if (selectedShow) fetchSeats(selectedShow);
     }
     setLoading(false);
+  };
+
+  const handleCancelBooking = async () => {
+    if (!confirmingSeat) return;
+    
+    try {
+      await axios.post(`${API_BASE}/unlock/`, {
+        seat_id: confirmingSeat.id,
+        user_name: userName
+      });
+      setConfirmingSeat(null);
+      if (selectedShow) fetchSeats(selectedShow);
+    } catch (err) {
+      console.error("Failed to unlock", err);
+      setConfirmingSeat(null);
+    }
   };
 
   return (
@@ -157,23 +217,52 @@ const App: React.FC = () => {
         <div className="booking-area">
           <h2>Select a Seat</h2>
           <div className="seat-grid">
-            {seats.map(seat => (
-              <div 
-                key={seat.id} 
-                className={`seat ${seat.status.toLowerCase()}`}
-              >
-                <div className="seat-label">{seat.seat_number}</div>
-                {seat.status === 'AVAILABLE' && (
-                  <div className="seat-actions">
-                    <button onClick={() => handleBook(seat.id, 'naive')}>Naive</button>
-                    <button onClick={() => handleBook(seat.id, 'pessimistic')}>Pessimist</button>
-                    <button onClick={() => handleBook(seat.id, 'optimistic')}>Optimist</button>
-                  </div>
-                )}
-                {seat.status === 'BOOKED' && <div className="booked-text">Booked</div>}
-              </div>
-            ))}
+            {seats.map(seat => {
+              // Client-side expiry check
+              let displayStatus = seat.status;
+              let isExpired = false;
+              
+              if (seat.status === 'LOCKED' && seat.locked_at) {
+                const lockTime = new Date(seat.locked_at).getTime();
+                // Check if it's older than 10 seconds
+                if (now - lockTime > 10000) {
+                  displayStatus = 'AVAILABLE';
+                  isExpired = true;
+                }
+              }
+
+              return (
+                <div 
+                  key={seat.id} 
+                  className={`seat ${displayStatus.toLowerCase()} ${(!isExpired && seat.locked_by === userName) ? 'my-lock' : ''}`}
+                  onClick={() => handleSeatClick(seat)}
+                >
+                  <div className="seat-label">{seat.seat_number}</div>
+                  {displayStatus === 'AVAILABLE' && <div className="status-text">Available</div>}
+                  {displayStatus === 'LOCKED' && <div className="status-text">Locked {seat.locked_by === userName ? '(You)' : ''}</div>}
+                  {displayStatus === 'BOOKED' && <div className="status-text">Booked</div>}
+                </div>
+              );
+            })}
           </div>
+
+          {confirmingSeat && (
+            <div className="modal-overlay">
+              <div className="modal">
+                <h3>Confirm Booking</h3>
+                <p>Are you sure you want to book seat <strong>{confirmingSeat.seat_number}</strong>?</p>
+                <p className="modal-timer">This seat is locked for you for 10 seconds.</p>
+                <div className="modal-actions">
+                  <button onClick={handleConfirmBooking} className="btn-confirm" disabled={loading}>
+                    {loading ? 'Booking...' : 'Yes, Book it!'}
+                  </button>
+                  <button onClick={handleCancelBooking} className="btn-cancel" disabled={loading}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

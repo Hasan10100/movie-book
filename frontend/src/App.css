@@ -96,28 +96,55 @@ button {
   justify-content: space-between;
 }
 
-.seat.available { background: #1e2433; border-color: #3d445d; }
-.seat.booked { background: #2d1a1a; border-color: #ff5252; color: #ff5252; opacity: 0.8; }
+.seat.available { background: #1e2433; border-color: #3d445d; cursor: pointer; }
+.seat.available:hover { background: #2d3245; }
+.seat.locked { background: #332b1e; border-color: #ffb300; color: #ffb300; cursor: pointer; }
+.seat.locked.my-lock { background: #3d2b0e; border-color: #ff9100; cursor: pointer; box-shadow: 0 0 10px rgba(255, 145, 0, 0.4); }
+.seat.booked { background: #2d1a1a; border-color: #ff5252; color: #ff5252; opacity: 0.8; cursor: not-allowed; }
 
-.seat-label { font-weight: bold; margin-bottom: 8px; }
+.status-text {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
 
-.seat-actions {
+/* Modal Styles */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.85);
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+  backdrop-filter: blur(4px);
 }
 
-.seat-actions button {
-  padding: 4px;
-  font-size: 0.7rem;
-  background: #2d3245;
-  border: 1px solid #3d445d;
-  color: #94a3b8;
+.modal {
+  background: #1a1d27;
+  padding: 30px;
+  border-radius: 12px;
+  border: 1px solid #2d3245;
+  width: 90%;
+  max-width: 400px;
+  text-align: center;
+  box-shadow: 0 20px 50px rgba(0,0,0,0.6);
 }
 
-.seat-actions button:hover { background: #4facfe; color: white; }
+.modal h3 { color: #4facfe; margin-top: 0; }
+.modal-timer { font-size: 0.85rem; color: #94a3b8; font-style: italic; }
 
-.booked-text {
-  font-size: 0.8rem;
-  font-weight: bold;
+.modal-actions {
+  display: flex;
+  gap: 15px;
+  margin-top: 25px;
+  justify-content: center;
 }
+
+.btn-confirm { background: #34a853; color: white; }
+.btn-confirm:hover { background: #2d9147; }
+.btn-cancel { background: #2d3245; color: #94a3b8; border: 1px solid #3d445d; }
+.btn-cancel:hover { background: #3d445d; color: white; }

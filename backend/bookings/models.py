@@ -10,11 +10,14 @@ class Show(models.Model):
 class Seat(models.Model):
     STATUS_CHOICES = [
         ('AVAILABLE', 'Available'),
+        ('LOCKED', 'Locked'),
         ('BOOKED', 'Booked'),
     ]
     show = models.ForeignKey(Show, related_name='seats', on_delete=models.CASCADE)
     seat_number = models.CharField(max_length=10)
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='AVAILABLE')
+    locked_at = models.DateTimeField(null=True, blank=True)
+    locked_by = models.CharField(max_length=100, null=True, blank=True)
     version = models.IntegerField(default=0)  # For optimistic locking
 
     class Meta:
